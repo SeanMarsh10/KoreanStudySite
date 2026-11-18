@@ -19,7 +19,7 @@ const submitAuth = () => guard(async () => {
   localStorage.setItem("token", token); authed.value = true; await loadDecks();
 });
 const logout = () => { localStorage.removeItem("token"); authed.value = false; deck.value = null; };
-const loadDecks = () => guard(async () => { decks.value = await api("/decks/"); });
+const loadDecks = () => guard(async () => { decks.value = await api("/decks/"); playlists.value = await api("/playlists/"); });
 const addDeck = () => guard(async () => { await api("/decks/", { method: "POST", body: { name: newDeck.value } }); newDeck.value = ""; await loadDecks(); });
 const delDeck = (d) => confirm(`Delete "${d.name}" and its cards?`) && guard(async () => { await api(`/decks/${d.id}/`, { method: "DELETE" }); await loadDecks(); });
 const open = (d) => { deck.value = d; notice.value = ""; resetForm(); return loadCards(); };
@@ -56,6 +56,14 @@ const importCsv = (e) => guard(async () => {
   } finally { input.value = ""; }
 });
 const delCard = (c) => guard(async () => { await api(`/cards/${c.id}/`, { method: "DELETE" }); await loadCards(); });
+const playlists = ref([]), playlist = ref(null), making = ref(false), plName = ref(""), plDecks = ref([]);
+const addPlaylist = () => guard(async () => {
+  await api("/playlists/", { method: "POST", body: { name: plName.value, decks: plDecks.value } });
+  plName.value = ""; plDecks.value = []; making.value = false; await loadDecks();
+});
+const delPlaylist = (p) => confirm(`Delete the playlist "${p.name}"? Its decks and cards stay.`) && guard(async () => { await api(`/playlists/${p.id}/`, { method: "DELETE" }); await loadDecks(); });
+const studyPlaylist = (p) => { playlist.value = { ...p, playlist: true }; studying.value = true; };
+const closeStudy = () => { studying.value = false; playlist.value = null; if (deck.value) loadCards(); };
 onMounted(() => authed.value && loadDecks());
 </script>
 
@@ -74,7 +82,7 @@ onMounted(() => authed.value && loadDecks());
       <button type="button" class="ghost full" @click="registering = !registering">{{ registering ? "I already have an account" : "I need an account" }}</button>
     </form>
 
-    <Study v-else-if="studying" :deck="deck" @close="studying = false; loadCards()" />
+    <Study v-else-if="studying" :deck="playlist || deck" @close="closeStudy" />
 
     <template v-else-if="deck">
       <div class="row" style="justify-content:space-between">
@@ -125,6 +133,25 @@ onMounted(() => authed.value && loadDecks());
         </article>
       </div>
       <p v-if="!decks.length" class="muted">No decks yet. Create one to start adding cards.</p>
+
+      <template v-if="decks.length > 1 || playlists.length">
+        <div class="row" style="justify-content:space-between; margin-top:32px">
+          <h2 style="margin:0">Playlists</h2>
+          <button v-if="decks.length > 1" class="ghost" @click="making = !making">{{ making ? "Cancel" : "New playlist" }}</button>
+        </div>
+        <form v-if="making" class="grid" style="margin-top:12px" @submit.prevent="addPlaylist">
+          <input v-model="plName" class="full" placeholder="Playlist name, e.g. Week 3 review" required />
+          <label v-for="d in decks" :key="d.id" class="row"><input v-model="plDecks" type="checkbox" :value="d.id" style="width:auto" /> {{ d.name }} <span class="muted">{{ d.card_count }}</span></label>
+          <button class="full" :disabled="plDecks.length < 2">Create playlist</button>
+          <p v-if="plDecks.length < 2" class="muted full">Choose at least two decks.</p>
+        </form>
+        <div class="decks">
+          <article v-for="p in playlists" :key="p.id" class="deck playlist">
+            <a href="#" class="deck-link" @click.prevent="studyPlaylist(p)"><strong>{{ p.name }}</strong><span>{{ p.deck_names.join(", ") }} ({{ p.card_count }} cards)</span></a>
+            <button class="ghost deck-del" :aria-label="`Delete playlist ${p.name}`" @click="delPlaylist(p)">Delete</button>
+          </article>
+        </div>
+      </template>
     </template>
   </main>
 </template>

@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from .models import Card, Deck
+from .models import Card, Deck, Playlist
 
 
 class DeckSerializer(serializers.ModelSerializer):
@@ -38,3 +38,26 @@ class CardSerializer(serializers.ModelSerializer):
         if match:
             raise serializers.ValidationError(f'"{attrs["korean"]}" is already in your cards (deck: {match.deck.name}).')
         return attrs
+
+
+class PlaylistSerializer(serializers.ModelSerializer):
+    decks = serializers.PrimaryKeyRelatedField(many=True, queryset=Deck.objects.all())
+    deck_names = serializers.SerializerMethodField()
+    card_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Playlist
+        fields = ["id", "name", "decks", "deck_names", "card_count"]
+
+    def validate_decks(self, decks):
+        if len(set(decks)) < 2:
+            raise serializers.ValidationError("Choose at least two decks.")
+        if any(d.owner != self.context["request"].user for d in decks):
+            raise serializers.ValidationError("One of those decks belongs to another user.")
+        return decks
+
+    def get_deck_names(self, obj):
+        return [d.name for d in obj.decks.all()]
+
+    def get_card_count(self, obj):
+        return Card.objects.filter(deck__in=obj.decks.all()).count()
