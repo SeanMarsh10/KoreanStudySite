@@ -13,5 +13,7 @@
 
 The "All cards" entry on the deck list is a live view of every card across decks (not a copy), so nothing is stored twice. A card with the same Korean and English as an existing one is rejected.
 
+CSV: "Export CSV" downloads the cards in view (pictures are not included). "Import CSV" needs `korean` and `english` columns; optional columns are `deck`, `romanization`, `example`, `notes`. A `deck` column files each row into that deck (created if new); otherwise rows go to the deck you are viewing. Cards already in your collection (same Korean + English) are skipped.
+
 Card styles in study mode: Korean to English, English to Korean, Picture to Korean, Picture to English.
 Spaced repetition: Leitner boxes (1 to 5); "Knew it" moves a card up and delays it (1, 3, 7, 21 days), "Still learning" resets it to box 1.
