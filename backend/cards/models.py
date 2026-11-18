@@ -39,3 +39,11 @@ class Review(models.Model):
     card = models.ForeignKey(Card, on_delete=models.CASCADE, related_name="reviews")
     correct = models.BooleanField()
     at = models.DateTimeField(auto_now_add=True)
+
+
+class Playlist(models.Model):
+    """A named study set made from two or more decks. Holds no cards of its own."""
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="playlists")
+    name = models.CharField(max_length=100)
+    decks = models.ManyToManyField(Deck, related_name="playlists")
+    created = models.DateTimeField(auto_now_add=True)

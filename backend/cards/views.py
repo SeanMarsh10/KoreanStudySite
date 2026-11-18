@@ -15,8 +15,8 @@ from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
-from .models import Card, Deck
-from .serializers import CardSerializer, DeckSerializer
+from .models import Card, Deck, Playlist
+from .serializers import CardSerializer, DeckSerializer, PlaylistSerializer
 
 
 CSV_FIELDS = ["deck", "korean", "english", "romanization", "example", "notes"]
@@ -35,6 +35,23 @@ class DeckViewSet(viewsets.ModelViewSet):
     def study(self, request, pk=None):
         """Cards that are due now, in random order."""
         cards = self.get_object().cards.filter(due__lte=timezone.now()).order_by("?")
+        return Response(CardSerializer(cards, many=True, context={"request": request}).data)
+
+
+class PlaylistViewSet(viewsets.ModelViewSet):
+    serializer_class = PlaylistSerializer
+
+    def get_queryset(self):
+        return Playlist.objects.filter(owner=self.request.user).prefetch_related("decks").order_by("name")
+
+    def perform_create(self, serializer):
+        serializer.save(owner=self.request.user)
+
+    @action(detail=True)
+    def study(self, request, pk=None):
+        """Due cards from every deck in the playlist."""
+        decks = self.get_object().decks.all()
+        cards = Card.objects.filter(deck__in=decks, due__lte=timezone.now()).order_by("?")
         return Response(CardSerializer(cards, many=True, context={"request": request}).data)
 
 
