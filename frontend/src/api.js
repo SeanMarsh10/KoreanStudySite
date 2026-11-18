@@ -13,3 +13,12 @@ export async function api(path, { method = "GET", body, form } = {}) {
   }
   return data;
 }
+
+export async function download(path, filename) {
+  const token = localStorage.getItem("token");
+  const res = await fetch(`/api${path}`, { headers: token ? { Authorization: `Token ${token}` } : {} });
+  if (!res.ok) throw new Error("Export failed. Try again.");
+  const url = URL.createObjectURL(await res.blob());
+  Object.assign(document.createElement("a"), { href: url, download: filename }).click();
+  URL.revokeObjectURL(url);
+}

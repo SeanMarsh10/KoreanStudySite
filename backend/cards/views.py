@@ -1,7 +1,12 @@
+import csv
+import io
+
 from django.contrib.auth.models import User
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.db.models import Q
+from django.http import HttpResponse
 from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.authtoken.models import Token
@@ -12,6 +17,9 @@ from rest_framework.response import Response
 
 from .models import Card, Deck
 from .serializers import CardSerializer, DeckSerializer
+
+
+CSV_FIELDS = ["deck", "korean", "english", "romanization", "example", "notes"]
 
 
 class DeckViewSet(viewsets.ModelViewSet):
@@ -48,6 +56,57 @@ class CardViewSet(viewsets.ModelViewSet):
         """Due cards from every deck (the 'All cards' list)."""
         cards = self.get_queryset().filter(due__lte=timezone.now()).order_by("?")
         return Response(CardSerializer(cards, many=True, context={"request": request}).data)
+
+    @action(detail=False)
+    def export(self, request):
+        """CSV of the cards in view (one deck with ?deck=ID, otherwise all). Pictures are not included."""
+        resp = HttpResponse(content_type="text/csv; charset=utf-8")
+        resp["Content-Disposition"] = 'attachment; filename="hangul-cards.csv"'
+        resp.write("\ufeff")  # BOM so Excel reads Hangul correctly
+        w = csv.writer(resp)
+        w.writerow(CSV_FIELDS)
+        for c in self.get_queryset().select_related("deck").order_by("deck__name", "id"):
+            w.writerow([c.deck.name, c.korean, c.english, c.romanization, c.example, c.notes])
+        return resp
+
+    @action(detail=False, methods=["post"], url_path="import")
+    def import_csv(self, request):
+        """Needs 'korean' and 'english' columns. A 'deck' column sends each row to that deck (created if new);
+        rows without one go to the deck chosen in the request. Duplicates are skipped."""
+        upload = request.FILES.get("file")
+        if not upload:
+            return Response({"detail": "Choose a CSV file."}, status=status.HTTP_400_BAD_REQUEST)
+        raw = upload.read()
+        try:
+            text = raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            text = raw.decode("cp949", errors="replace")  # Korean Excel often saves CSV this way
+        reader = csv.DictReader(io.StringIO(text))
+        reader.fieldnames = [(h or "").strip().lower() for h in (reader.fieldnames or [])]
+        if not {"korean", "english"} <= set(reader.fieldnames):
+            return Response({"detail": "The file needs 'korean' and 'english' columns."}, status=status.HTTP_400_BAD_REQUEST)
+
+        decks = {d.name: d for d in Deck.objects.filter(owner=request.user)}
+        target = Deck.objects.filter(owner=request.user, pk=request.data.get("deck") or 0).first()
+        seen = {(k.lower(), e.lower()) for k, e in Card.objects.filter(deck__owner=request.user).values_list("korean", "english")}
+        created = skipped = invalid = 0
+        with transaction.atomic():
+            for row in reader:
+                get = lambda k: (row.get(k) or "").strip()
+                ko, en, rom, name = get("korean"), get("english"), get("romanization"), get("deck")
+                deck = decks.get(name) if name else target
+                if name and deck is None:
+                    deck = decks[name] = Deck.objects.create(owner=request.user, name=name[:100])
+                if not ko or not en or deck is None or max(len(ko), len(en), len(rom)) > 200:
+                    invalid += 1
+                    continue
+                if (ko.lower(), en.lower()) in seen:
+                    skipped += 1
+                    continue
+                seen.add((ko.lower(), en.lower()))
+                Card.objects.create(deck=deck, korean=ko, english=en, romanization=rom, example=get("example"), notes=get("notes"))
+                created += 1
+        return Response({"created": created, "skipped": skipped, "invalid": invalid})
 
     @action(detail=True, methods=["post"])
     def review(self, request, pk=None):

@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, onMounted } from "vue";
-import { api } from "./api.js";
+import { api, download } from "./api.js";
 import Study from "./Study.vue";
 
 const authed = ref(!!localStorage.getItem("token"));
@@ -22,13 +22,38 @@ const logout = () => { localStorage.removeItem("token"); authed.value = false; d
 const loadDecks = () => guard(async () => { decks.value = await api("/decks/"); });
 const addDeck = () => guard(async () => { await api("/decks/", { method: "POST", body: { name: newDeck.value } }); newDeck.value = ""; await loadDecks(); });
 const delDeck = (d) => confirm(`Delete "${d.name}" and its cards?`) && guard(async () => { await api(`/decks/${d.id}/`, { method: "DELETE" }); await loadDecks(); });
-const open = (d) => { deck.value = d; return loadCards(); };
+const open = (d) => { deck.value = d; notice.value = ""; resetForm(); return loadCards(); };
+const closeDeck = () => { deck.value = null; notice.value = ""; resetForm(); loadDecks(); };
 const loadCards = () => guard(async () => { cards.value = await api(`/cards/?${deck.value.id ? `deck=${deck.value.id}&` : ""}q=${encodeURIComponent(search.value)}`); });
-const addCard = () => guard(async () => {
-  const fd = new FormData(); fd.append("deck", deck.value.id);
-  for (const [k, v] of Object.entries(form.value)) if (v) fd.append(k, v);
-  await api("/cards/", { method: "POST", form: fd });
-  form.value = blank(); if (fileInput.value) fileInput.value.value = ""; await loadCards();
+const editing = ref(null), notice = ref(""), csvInput = ref(null);
+const resetForm = () => { form.value = blank(); editing.value = null; if (fileInput.value) fileInput.value.value = ""; };
+const saveCard = () => guard(async () => {
+  const fd = new FormData();
+  if (!editing.value) fd.append("deck", deck.value.id);
+  for (const [k, v] of Object.entries(form.value)) {
+    if (k === "image") { if (v) fd.append(k, v); }          // no file chosen: keep the current picture
+    else if (editing.value || v) fd.append(k, v);            // when editing, send empty text too so it can be cleared
+  }
+  await api(editing.value ? `/cards/${editing.value.id}/` : "/cards/", { method: editing.value ? "PATCH" : "POST", form: fd });
+  resetForm(); await loadCards();
+});
+const startEdit = (c) => {
+  editing.value = c;
+  form.value = { korean: c.korean, english: c.english, romanization: c.romanization, example: c.example, notes: c.notes, image: null };
+  if (fileInput.value) fileInput.value.value = "";
+  window.scrollTo({ top: 0, behavior: "smooth" });
+};
+const exportCsv = () => guard(() => download(deck.value.id ? `/cards/export/?deck=${deck.value.id}` : "/cards/export/", `${deck.value.name}.csv`));
+const importCsv = (e) => guard(async () => {
+  const input = e.target, file = input.files[0];
+  if (!file) return;
+  const fd = new FormData(); fd.append("file", file); if (deck.value.id) fd.append("deck", deck.value.id);
+  try {
+    const r = await api("/cards/import/", { method: "POST", form: fd });
+    const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+    notice.value = [`Imported ${plural(r.created, "card")}.`, r.skipped && `Skipped ${plural(r.skipped, "duplicate")}.`, r.invalid && `${plural(r.invalid, "row")} had no Korean, English or deck, or was too long.`].filter(Boolean).join(" ");
+    await loadCards();
+  } finally { input.value = ""; }
 });
 const delCard = (c) => guard(async () => { await api(`/cards/${c.id}/`, { method: "DELETE" }); await loadCards(); });
 onMounted(() => authed.value && loadDecks());
@@ -53,25 +78,33 @@ onMounted(() => authed.value && loadDecks());
 
     <template v-else-if="deck">
       <div class="row" style="justify-content:space-between">
-        <button class="ghost" @click="deck = null; loadDecks()">All decks</button>
+        <button class="ghost" @click="closeDeck">All decks</button>
         <button @click="studying = true">Study {{ deck.name }}</button>
       </div>
-      <h2 v-if="!deck.all">Add a card</h2>
-      <form v-if="!deck.all" class="grid" @submit.prevent="addCard">
+      <div class="row" style="margin-top:12px">
+        <button class="ghost" @click="exportCsv">Export CSV</button>
+        <button class="ghost" @click="csvInput.click()">Import CSV</button>
+        <input ref="csvInput" type="file" accept=".csv,text/csv" hidden @change="importCsv" />
+      </div>
+      <p v-if="notice" class="muted" role="status">{{ notice }}</p>
+      <h2 v-if="!deck.all || editing">{{ editing ? "Edit card" : "Add a card" }}</h2>
+      <form v-if="!deck.all || editing" class="grid" @submit.prevent="saveCard">
         <input v-model="form.korean" class="ko" placeholder="Korean" required />
         <input v-model="form.english" placeholder="English" required />
         <input v-model="form.romanization" placeholder="Romanization (optional)" />
         <input ref="fileInput" type="file" accept="image/*" @change="form.image = $event.target.files[0]" aria-label="Picture (optional)" />
+        <p v-if="editing && editing.image" class="muted full">Choose a new picture to replace the current one, or leave it empty to keep it.</p>
         <textarea v-model="form.example" class="full" rows="2" placeholder="Example sentence (optional)"></textarea>
         <textarea v-model="form.notes" class="full" rows="2" placeholder="Notes (optional)"></textarea>
-        <button class="full">Add card</button>
+        <button class="full">{{ editing ? "Save changes" : "Add card" }}</button>
+        <button v-if="editing" type="button" class="ghost full" @click="resetForm">Cancel</button>
       </form>
       <h2>Cards in {{ deck.name }}</h2>
       <input v-model="search" placeholder="Search cards" @input="loadCards" aria-label="Search cards" />
       <ul class="list">
         <li v-for="c in cards" :key="c.id">
           <span class="row"><img v-if="c.image" :src="c.image" class="thumb" alt="" /><span><strong class="ko">{{ c.korean }}</strong> <span class="muted">{{ c.english }}</span> <em v-if="deck.all" class="muted">in {{ c.deck_name }}</em></span></span>
-          <button class="ghost" @click="delCard(c)">Delete</button>
+          <span class="row"><button class="ghost" @click="startEdit(c)">Edit</button><button class="ghost" @click="delCard(c)">Delete</button></span>
         </li>
       </ul>
       <p v-if="!cards.length" class="muted">No cards yet. Add your first one above.</p>
